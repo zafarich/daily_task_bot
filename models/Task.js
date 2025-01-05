@@ -12,26 +12,6 @@ const taskSchema = new mongoose.Schema(
       required: true,
     },
     description: String,
-    subscribers: [
-      {
-        studentId: {
-          type: Number,
-          ref: "User",
-        },
-        status: {
-          type: String,
-          enum: ["pending", "completed"],
-          default: "pending",
-        },
-        completedAt: Date,
-      },
-    ],
-    remindersSent: {
-      type: Number,
-      default: 0,
-    },
-    lastReminderAt: Date,
-    nextReminderAt: Date,
     shareLink: {
       type: String,
       unique: true,
