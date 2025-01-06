@@ -61,6 +61,14 @@ bot.command("start", async (ctx) => {
           status: "pending",
         });
 
+        // O'qituvchiga xabar yuborish
+        const student = await User.findOne({telegramId: ctx.from.id});
+        const taskInfo = await Task.findById(task._id);
+        await bot.api.sendMessage(
+          task.teacherId,
+          `🔔 Yangi obuna!\n\nO'quvchi: ${student.firstName}\nVazifa: ${taskInfo.title}`
+        );
+
         // Tarixga yozish
         await TaskHistory.create({
           taskId: task._id,
@@ -109,6 +117,14 @@ bot.command("start", async (ctx) => {
           teacherId: task.teacherId,
           status: "pending",
         });
+
+        // O'qituvchiga xabar yuborish
+        const student = await User.findOne({telegramId: ctx.from.id});
+        const taskInfo = await Task.findById(task._id);
+        await bot.api.sendMessage(
+          task.teacherId,
+          `🔔 Yangi obuna!\n\nO'quvchi: ${student.firstName}\nVazifa: ${taskInfo.title}`
+        );
 
         // Tarixga yozish
         await TaskHistory.create({
@@ -351,10 +367,8 @@ bot.on("message:text", async (ctx) => {
               (s) => s.status === "completed"
             ).length;
             const total = subscriptions.length;
-            const status = `[${completed}/${total}]`;
-            keyboard
-              .text(`${status} ${task.title}`, `share_task_${task._id}`)
-              .row();
+
+            keyboard.text(`${task.title}`, `share_task_${task._id}`).row();
           }
         }
 
@@ -492,10 +506,89 @@ bot.on("callback_query:data", async (ctx) => {
   console.log("Callback data:", data);
 
   try {
+    // Vazifalarni ko'rsatish
+    if (data === "show_tasks") {
+      try {
+        console.log("Vazifalar ko'rsatilmoqda...");
+        const user = await User.findOne({telegramId: ctx.from.id});
+        console.log("Foydalanuvchi:", user);
+
+        if (!user) {
+          console.log("Foydalanuvchi topilmadi");
+          await ctx.answerCallbackQuery("Foydalanuvchi topilmadi");
+          return;
+        }
+
+        let tasks;
+        if (user.role === "teacher") {
+          console.log("O'qituvchi vazifalari olinmoqda...");
+          tasks = await Task.find({teacherId: ctx.from.id});
+        } else {
+          console.log("O'quvchi vazifalari olinmoqda...");
+          const subscriptions = await Subscription.find({
+            studentId: ctx.from.id,
+          });
+          console.log("O'quvchi obunalari:", subscriptions);
+
+          const taskIds = subscriptions.map((s) => s.taskId);
+          tasks = await Task.find({_id: {$in: taskIds}});
+        }
+        console.log("Topilgan vazifalar:", tasks);
+
+        if (!tasks || tasks.length === 0) {
+          console.log("Vazifalar topilmadi");
+          await ctx.answerCallbackQuery();
+          await ctx.reply("Hozircha vazifalar yo'q", {
+            reply_markup: {
+              keyboard:
+                user.role === "student"
+                  ? [[{text: "📝 Vazifalar"}]]
+                  : [[{text: "📝 Vazifalar"}, {text: "👥 O'quvchilar"}]],
+              resize_keyboard: true,
+            },
+          });
+          return;
+        }
+
+        const keyboard = new InlineKeyboard();
+
+        if (user.role === "student") {
+          for (const task of tasks) {
+            const subscription = await Subscription.findOne({
+              taskId: task._id,
+              studentId: ctx.from.id,
+            });
+            const status = subscription.status === "completed" ? "✅" : "⏳";
+            keyboard.text(`${status} ${task.title}`, `task_${task._id}`).row();
+          }
+        } else {
+          for (const task of tasks) {
+            keyboard.text(task.title, `task_${task._id}`).row();
+          }
+        }
+        await ctx.answerCallbackQuery();
+        await ctx.reply("Vazifalar ro'yxati:", {
+          reply_markup: keyboard,
+          reply_markup_bottom: {
+            keyboard:
+              user.role === "student"
+                ? [[{text: "📝 Vazifalar"}]]
+                : [[{text: "📝 Vazifalar"}, {text: "👥 O'quvchilar"}]],
+            resize_keyboard: true,
+          },
+        });
+      } catch (error) {
+        console.error("Vazifalarni ko'rsatish xatosi:", error);
+        await ctx.answerCallbackQuery("Xatolik yuz berdi");
+      }
+    }
+
     // Rol tanlash
     if (data.startsWith("role_")) {
       const role = data.split("_")[1];
       await User.findOneAndUpdate({telegramId: ctx.from.id}, {role: role});
+
+      await ctx.answerCallbackQuery();
 
       if (role === "student") {
         await ctx.reply("Siz o'quvchi sifatida ro'yxatdan o'tdingiz.", {
@@ -514,7 +607,6 @@ bot.on("callback_query:data", async (ctx) => {
         });
         ctx.session.step = "idle";
       }
-      await ctx.answerCallbackQuery();
       return;
     }
 
@@ -572,8 +664,7 @@ bot.on("callback_query:data", async (ctx) => {
         const subscription = subscriptions.find(
           (s) => s.studentId === student.telegramId
         );
-        const status = subscription.status === "completed" ? "✅" : "⏳";
-        message += `${status} ${student.firstName}`;
+        message += `${student.firstName}`;
         if (student.username) message += ` (@${student.username})`;
         if (subscription.completedAt) {
           message += ` - ${subscription.completedAt.toLocaleTimeString(
@@ -588,8 +679,7 @@ bot.on("callback_query:data", async (ctx) => {
 
       const keyboard = new InlineKeyboard()
         .text("⬅️ Orqaga", "show_tasks")
-        .row()
-        .text("❌ Obunani bekor qilish", `unfollow_${ctx.from.id}_${task._id}`);
+        .row();
 
       await ctx.answerCallbackQuery();
       await ctx.reply(message, {
@@ -602,17 +692,20 @@ bot.on("callback_query:data", async (ctx) => {
       return;
     }
 
-    // O'quvchini vazifadan chiqarish
+    // Obunani bekor qilish
     if (data.startsWith("unfollow_")) {
       try {
         const [, studentId, taskId] = data.split("_");
+        const user = await User.findOne({telegramId: ctx.from.id});
 
         // O'quvchining obunasini o'chirish
         const subscription = await Subscription.findOneAndDelete({
           taskId: taskId,
           studentId: parseInt(studentId),
-          teacherId: ctx.from.id,
         });
+
+        const teacherId = subscription.teacherId;
+        console.log("subscription", subscription);
 
         if (!subscription) {
           await ctx.answerCallbackQuery("Obuna topilmadi");
@@ -623,83 +716,101 @@ bot.on("callback_query:data", async (ctx) => {
         const task = await Task.findById(taskId);
         const student = await User.findOne({telegramId: parseInt(studentId)});
 
+        // Vazifa tarixini o'chirish
+        await TaskHistory.deleteMany({
+          taskId: taskId,
+          studentId: parseInt(studentId),
+        });
+
         if (!task || !student) {
           await ctx.answerCallbackQuery("Vazifa yoki o'quvchi topilmadi");
           return;
         }
 
-        await TaskHistory.create({
-          taskId: taskId,
-          studentId: parseInt(studentId),
-          teacherId: ctx.from.id,
-          taskTitle: task.title,
-          action: "unsubscribed",
-        });
-
-        // O'quvchiga xabar yuborish
+        // O'quvchiga va o'qituvchiga xabar yuborish
         try {
-          await bot.api.sendMessage(
-            parseInt(studentId),
-            `❌ Siz "${task.title}" vazifasidan chiqarildingiz.`
-          );
+          if (user.role === "teacher") {
+            await ctx.reply(
+              `✅ Siz "${task.title}" vazifasidan ${student.firstName} o'quvchisini chiqardingiz`
+            );
+            await bot.api.sendMessage(
+              parseInt(studentId),
+              `❌ Siz "${task.title}" vazifasidan chiqarildingiz.`
+            );
+          } else {
+            bot.api.sendMessage(
+              parseInt(teacherId),
+              `❌ ${student.firstName} o'quvchingiz "${task.title}" vazifasidan chiqib ketdi`
+            );
+
+            ctx.reply(`✅ Siz "${task.title}" vazifasidan chiqdingiz`, {
+              reply_markup: {
+                keyboard: [[{text: "📝 Vazifalar"}]],
+                resize_keyboard: true,
+              },
+            });
+          }
         } catch (error) {
-          console.error("O'quvchiga xabar yuborish xatosi:", error);
+          console.error(
+            "O'quvchiga/o'qituvchiga xabar yuborish xatosi:",
+            error
+          );
         }
 
-        // O'quvchining vazifalar ro'yxatiga qaytish
-        const subscriptions = await Subscription.find({
-          studentId: parseInt(studentId),
-          teacherId: ctx.from.id,
-        }).sort("-subscribedAt");
+        if (user.role === "teacher") {
+          // O'quvchining vazifalar ro'yxatiga qaytish
+          const subscriptions = await Subscription.find({
+            studentId: parseInt(studentId),
+            teacherId: teacherId,
+          }).sort("-subscribedAt");
 
-        if (subscriptions.length === 0) {
+          if (subscriptions.length === 0 && user.role === "teacher") {
+            await ctx.answerCallbackQuery("O'quvchi vazifadan chiqarildi");
+            await ctx.reply("O'quvchining boshqa vazifalari yo'q", {
+              reply_markup: {
+                keyboard: [[{text: "📝 Vazifalar"}, {text: "👥 O'quvchilar"}]],
+                resize_keyboard: true,
+              },
+            });
+            return;
+          }
+
+          const keyboard = new InlineKeyboard();
+          for (const subscription of subscriptions) {
+            const task = await Task.findById(subscription.taskId);
+            if (task) {
+              // Bugungi kun uchun bajarilganlik holatini tekshirish
+              const today = new Date();
+              today.setHours(0, 0, 0, 0);
+
+              const todayHistory = await TaskHistory.findOne({
+                taskId: task._id,
+                studentId: parseInt(studentId),
+                action: "completed",
+                timestamp: {
+                  $gte: today,
+                  $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000),
+                },
+              });
+
+              keyboard
+                .text(`${task.title}`, `student_task_${studentId}_${task._id}`)
+                .row();
+            }
+          }
+          keyboard.text("⬅️ Orqaga", `student_${studentId}`);
+
           await ctx.answerCallbackQuery("O'quvchi vazifadan chiqarildi");
-          await ctx.reply("O'quvchining boshqa vazifalari yo'q", {
-            reply_markup: {
+          await ctx.reply(`${student.firstName}ning vazifalari:`, {
+            reply_markup: keyboard,
+            reply_markup_bottom: {
               keyboard: [[{text: "📝 Vazifalar"}, {text: "👥 O'quvchilar"}]],
               resize_keyboard: true,
             },
           });
-          return;
         }
 
-        const keyboard = new InlineKeyboard();
-        for (const subscription of subscriptions) {
-          const task = await Task.findById(subscription.taskId);
-          if (task) {
-            // Bugungi kun uchun bajarilganlik holatini tekshirish
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-
-            const todayHistory = await TaskHistory.findOne({
-              taskId: task._id,
-              studentId: parseInt(studentId),
-              action: "completed",
-              timestamp: {
-                $gte: today,
-                $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000),
-              },
-            });
-
-            const status = todayHistory ? "✅" : "⏳";
-            keyboard
-              .text(
-                `${status} ${task.title}`,
-                `student_task_${studentId}_${task._id}`
-              )
-              .row();
-          }
-        }
-        keyboard.text("⬅️ Orqaga", `student_${studentId}`);
-
-        await ctx.answerCallbackQuery("O'quvchi vazifadan chiqarildi");
-        await ctx.reply(`${student.firstName}ning vazifalari:`, {
-          reply_markup: keyboard,
-          reply_markup_bottom: {
-            keyboard: [[{text: "📝 Vazifalar"}, {text: "👥 O'quvchilar"}]],
-            resize_keyboard: true,
-          },
-        });
+        await ctx.answerCallbackQuery();
       } catch (error) {
         console.error("Vazifadan chiqarish xatosi:", error);
         await ctx.answerCallbackQuery("Xatolik yuz berdi");
@@ -717,7 +828,7 @@ bot.on("callback_query:data", async (ctx) => {
         studentId: studentId,
       });
 
-      await ctx.answerCallbackQuery("O'quvchi barcha vazifalardan o'chirildi");
+      await ctx.answerCallbackQuery();
       await ctx.reply("O'quvchi muvaffaqiyatli o'chirildi");
 
       await showStudentsList(ctx);
@@ -737,10 +848,11 @@ bot.on("callback_query:data", async (ctx) => {
         const [, , studentId, taskId] = data.split("_");
         const task = await Task.findById(taskId);
         const student = await User.findOne({telegramId: parseInt(studentId)});
+        const teacherId = ctx.from.id;
         const subscription = await Subscription.findOne({
           taskId: taskId,
           studentId: parseInt(studentId),
-          teacherId: ctx.from.id,
+          teacherId: teacherId,
         });
 
         if (!task || !student || !subscription) {
@@ -774,10 +886,8 @@ bot.on("callback_query:data", async (ctx) => {
         }).sort("timestamp");
 
         let message = `📝 Vazifa: ${task.title}\n`;
-        message += `👤 O'quvchi: ${student.firstName}\n`;
-        message += `📊 Status: ${
-          todayHistory ? "✅ Bajarilgan" : "⏳ Bajarilmagan"
-        }\n\n`;
+        message += `👤 O'quvchi: ${student.firstName}\n\n`;
+
         message += "📅 Oxirgi 10 kunlik natijalar:\n";
 
         // Har bir kun uchun natijani tekshirish
@@ -811,13 +921,6 @@ bot.on("callback_query:data", async (ctx) => {
         }
 
         message += `${results.join("")}\n`;
-
-        if (todayHistory) {
-          message += `\n🕓 Bajarilgan vaqt: ${todayHistory.timestamp.toLocaleTimeString(
-            "uz-UZ",
-            {hour: "2-digit", minute: "2-digit"}
-          )}\n`;
-        }
 
         const keyboard = new InlineKeyboard()
           .text("⬅️ Orqaga", `student_tasks_${studentId}`)
@@ -994,12 +1097,8 @@ bot.on("callback_query:data", async (ctx) => {
               },
             });
 
-            const status = todayHistory ? "✅" : "⏳";
             keyboard
-              .text(
-                `${status} ${task.title}`,
-                `student_task_${studentId}_${task._id}`
-              )
+              .text(`${task.title}`, `student_task_${studentId}_${task._id}`)
               .row();
           }
         }
@@ -1019,6 +1118,250 @@ bot.on("callback_query:data", async (ctx) => {
       }
       return;
     }
+
+    // Vazifa ma'lumotlarini ko'rsatish
+    if (data.startsWith("task_")) {
+      try {
+        console.log("Vazifa tanlanmoqda...");
+        const taskId = data.split("_")[1];
+        console.log("TaskId:", taskId);
+
+        const task = await Task.findById(taskId);
+        console.log("Topilgan vazifa:", task);
+
+        if (!task) {
+          console.log("Vazifa topilmadi");
+          await ctx.answerCallbackQuery("Vazifa topilmadi");
+          return;
+        }
+
+        const user = await User.findOne({telegramId: ctx.from.id});
+        console.log("Foydalanuvchi:", user);
+
+        const teacher = await User.findOne({telegramId: task.teacherId});
+        console.log("O'qituvchi:", teacher);
+
+        let message = `📝 Vazifa: ${task.title}\n\n`;
+
+        if (user.role === "student") {
+          message += `👤 O'qituvchi: ${teacher.firstName}\n\n`;
+        }
+        let subscription;
+        if (user.role === "teacher") {
+          console.log("O'qituvchi uchun ma'lumotlar tayyorlanmoqda...");
+          // O'qituvchi uchun statistika
+          const subscriptions = await Subscription.find({taskId: task._id});
+          console.log("Obunalar:", subscriptions);
+
+          const completed = subscriptions.filter(
+            (s) => s.status === "completed"
+          ).length;
+          message += `\n📊 Statistika:\n`;
+          message += `👥 Obunachi o'quvchilar: ${subscriptions.length}\n`;
+          message += `✅ Bajarilgan: ${completed}\n`;
+          message += `⏳ Bajarilmagan: ${subscriptions.length - completed}\n`;
+
+          // Obuna havolasini ko'rsatish
+          const shareUrl = `https://t.me/${ctx.me.username}?start=${task.shareLink}`;
+          message += `\n🔗 Obuna havolasi:\n${shareUrl}`;
+        } else {
+          console.log("O'quvchi uchun ma'lumotlar tayyorlanmoqda...");
+          // O'quvchi uchun status
+          subscription = await Subscription.findOne({
+            taskId: task._id,
+            studentId: ctx.from.id,
+          });
+          console.log("O'quvchining obunasi:", subscription);
+
+          if (!subscription) {
+            console.log("Obuna topilmadi");
+            await ctx.answerCallbackQuery("Siz bu vazifaga obuna bo'lmagansiz");
+            return;
+          }
+
+          message += `📊 Status: ${
+            subscription.status === "completed"
+              ? "✅ Bajarilgan"
+              : "⏳ Bajarilmagan"
+          }\n`;
+
+          // Bugungi kun uchun bajarilganlik holatini tekshirish
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+
+          const todayHistory = await TaskHistory.findOne({
+            taskId: task._id,
+            studentId: ctx.from.id,
+            action: "completed",
+            timestamp: {
+              $gte: today,
+              $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000),
+            },
+          });
+          console.log("Bugungi natija:", todayHistory);
+        }
+
+        const keyboard = new InlineKeyboard();
+
+        if (user.role === "student") {
+          if (!subscription) {
+            subscription = await Subscription.findOne({
+              taskId: task._id,
+              studentId: ctx.from.id,
+            });
+          }
+          console.log("Tugmalar uchun obuna:", subscription);
+
+          if (!subscription) {
+            console.log("Obuna topilmadi");
+            await ctx.answerCallbackQuery("Siz bu vazifaga obuna bo'lmagansiz");
+            return;
+          }
+
+          if (subscription.status === "pending") {
+            keyboard.text("✅ Bajarildi", `complete_${task._id}`);
+          }
+        }
+        keyboard
+          .text("⬅️ Orqaga", "show_tasks")
+          .row()
+          .text(
+            "❌ Obunani bekor qilish",
+            `unfollow_${ctx.from.id}_${task._id}`
+          );
+
+        console.log("Xabar yuborilmoqda:", message);
+        await ctx.answerCallbackQuery();
+        await ctx.reply(message, {
+          reply_markup: keyboard,
+          reply_markup_bottom:
+            user.role === "student"
+              ? {
+                  keyboard: [[{text: "📝 Vazifalar"}]],
+                  resize_keyboard: true,
+                }
+              : {
+                  keyboard: [
+                    [{text: "📝 Vazifalar"}, {text: "👥 O'quvchilar"}],
+                  ],
+                  resize_keyboard: true,
+                },
+        });
+      } catch (error) {
+        console.error("Vazifa ma'lumotlarini ko'rsatish xatosi:", error);
+        await ctx.answerCallbackQuery("Xatolik yuz berdi");
+      }
+    }
+
+    // Vazifani bajarildi deb belgilash
+    if (data.startsWith("complete_")) {
+      try {
+        console.log("Vazifa bajarildi deb belgilanmoqda...");
+        const taskId = data.split("_")[1];
+        console.log("TaskId:", taskId);
+
+        const task = await Task.findById(taskId);
+        console.log("Topilgan vazifa:", task);
+
+        if (!task) {
+          console.log("Vazifa topilmadi");
+          await ctx.answerCallbackQuery("Vazifa topilmadi");
+          return;
+        }
+
+        // O'quvchini tekshirish
+        const user = await User.findOne({telegramId: ctx.from.id});
+        if (!user || user.role !== "student") {
+          console.log("Foydalanuvchi o'quvchi emas");
+          await ctx.answerCallbackQuery("Bu funksiya faqat o'quvchilar uchun");
+          return;
+        }
+
+        const subscription = await Subscription.findOne({
+          taskId: task._id,
+          studentId: ctx.from.id,
+        });
+        console.log("O'quvchining obunasi:", subscription);
+
+        if (!subscription) {
+          console.log("Obuna topilmadi");
+          await ctx.answerCallbackQuery("Siz bu vazifaga obuna bo'lmagansiz");
+          return;
+        }
+
+        if (subscription.status === "completed") {
+          console.log("Vazifa allaqachon bajarilgan");
+          await ctx.answerCallbackQuery("Bu vazifa allaqachon bajarilgan");
+          return;
+        }
+
+        // Vazifani bajarildi deb belgilash
+        subscription.status = "completed";
+        subscription.completedAt = new Date();
+        await subscription.save();
+        console.log("Obuna yangilandi:", subscription);
+
+        // Tarixga yozish
+        const history = await TaskHistory.create({
+          taskId: task._id,
+          studentId: ctx.from.id,
+          teacherId: task.teacherId,
+          taskTitle: task.title,
+          action: "completed",
+          timestamp: new Date(),
+        });
+        console.log("Tarixga yozildi:", history);
+
+        // O'qituvchiga xabar yuborish
+        try {
+          await bot.api.sendMessage(
+            task.teacherId,
+            `✅ Vazifa bajarildi!\n\n👤 O'quvchi: ${
+              user.firstName
+            }\n\n📝 Vazifa: ${
+              task.title
+            }\n\n⏰ Vaqt: ${new Date().toLocaleTimeString("uz-UZ", {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}`
+          );
+          console.log("O'qituvchiga xabar yuborildi");
+        } catch (error) {
+          console.error("O'qituvchiga xabar yuborish xatosi:", error);
+        }
+
+        await ctx.answerCallbackQuery("✅ Vazifa bajarildi deb belgilandi!");
+
+        // Vazifani yangilangan ma'lumotlarini ko'rsatish
+        const teacher = await User.findOne({telegramId: task.teacherId});
+        const keyboard = new InlineKeyboard()
+          .text("⬅️ Orqaga", "show_tasks")
+          .row()
+          .text(
+            "❌ Obunani bekor qilish",
+            `unfollow_${ctx.from.id}_${task._id}`
+          );
+
+        let message = `📝 Vazifa: ${task.title}\n`;
+        message += `👤 O'qituvchi: ${
+          teacher ? teacher.firstName : "O'chirilgan"
+        }\n`;
+
+        console.log("Xabar yuborilmoqda:", message);
+        await ctx.reply(message, {
+          reply_markup: keyboard,
+          reply_markup_bottom: {
+            keyboard: [[{text: "📝 Vazifalar"}]],
+            resize_keyboard: true,
+          },
+        });
+      } catch (error) {
+        console.error("Vazifani bajarildi deb belgilash xatosi:", error);
+        await ctx.answerCallbackQuery("Xatolik yuz berdi");
+      }
+    }
+
+    await ctx.answerCallbackQuery();
   } catch (error) {
     console.error("Callback query xatosi:", error);
     await ctx.answerCallbackQuery("Xatolik yuz berdi");
@@ -1081,52 +1424,92 @@ async function sendReminders() {
   try {
     console.log("Eslatmalarni tekshirish boshlandi...");
 
-    // Bugungi kun
+    // Joriy vaqt
     const now = new Date();
-    const startOfDay = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate()
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+
+    // Belgilangan vaqtlarni tekshirish
+    const reminderTimes = [
+      {hour: 9, minute: 30},
+      {hour: 12, minute: 30},
+      {hour: 20, minute: 0},
+    ];
+
+    // Hozirgi vaqt belgilangan vaqtlardan biri bo'lmasa, chiqib ketish
+    const isReminderTime = reminderTimes.some(
+      (time) => time.hour === currentHour && time.minute === currentMinute
     );
-    const endOfDay = new Date(startOfDay);
-    endOfDay.setDate(endOfDay.getDate() + 1);
 
-    // Bajarilmagan vazifalarni olish
-    const tasks = await Task.find({
-      status: "pending",
-      remindersSent: {$lt: 3},
-      $or: [{nextReminderAt: {$exists: false}}, {nextReminderAt: {$lte: now}}],
-    });
+    if (!isReminderTime) {
+      return;
+    }
 
-    console.log(`${tasks.length} ta eslatma yuborilishi kerak`);
+    // Barcha o'quvchilarni olish
+    const students = await User.find({role: "student"});
+    console.log(`${students.length} ta o'quvchi topildi`);
 
-    for (const task of tasks) {
+    for (const student of students) {
       try {
-        const student = await User.findOne({telegramId: task.studentId});
-        if (!student) continue;
+        // O'quvchining bajarilmagan vazifalarini olish
+        const subscriptions = await Subscription.find({
+          studentId: student.telegramId,
+          status: "pending",
+        });
 
-        // Eslatma xabari
-        const reminderMessage = `⚠️ Eslatma!\nVazifa: ${task.title}\nStatus: Bajarilmagan\nIltimos, vazifani bajarishni unutmang!`;
+        if (subscriptions.length === 0) continue;
 
-        await bot.api.sendMessage(student.telegramId, reminderMessage);
+        // Bugungi bajarilgan vazifalarni olish
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
 
-        // Keyingi eslatma vaqtini hisoblash (har 4 soatda)
-        const nextReminder = new Date();
-        nextReminder.setHours(nextReminder.getHours() + 4);
+        const completedToday = await TaskHistory.find({
+          studentId: student.telegramId,
+          action: "completed",
+          timestamp: {
+            $gte: today,
+            $lt: tomorrow,
+          },
+        });
 
-        // Eslatma ma'lumotlarini yangilash
-        await Task.updateOne(
-          {_id: task._id},
-          {
-            $inc: {remindersSent: 1},
-            lastReminderAt: now,
-            nextReminderAt: nextReminder,
+        // Bajarilmagan vazifalar ro'yxatini tayyorlash
+        const pendingTasks = [];
+        for (const sub of subscriptions) {
+          const isCompletedToday = completedToday.some(
+            (h) => h.taskId.toString() === sub.taskId.toString()
+          );
+          if (!isCompletedToday) {
+            const task = await Task.findById(sub.taskId);
+            if (task) pendingTasks.push(task.title);
           }
-        );
+        }
 
-        console.log(`Eslatma yuborildi: ${student.firstName} - ${task.title}`);
+        if (pendingTasks.length === 0) continue;
+
+        // Vaqtga qarab xabar matnini tanlash
+        let messageText = "";
+        if (currentHour === 9) {
+          messageText =
+            "🌅 Xayrli kun! Bugun quyidagi vazifalarni bajarishni unutmang:";
+        } else if (currentHour === 12) {
+          messageText =
+            "🌞 Kunning yarmi o'tdi! Quyidagi vazifalar hali bajarilmagan:";
+        } else {
+          messageText =
+            "🌙 Kun tugashidan oldin quyidagi vazifalarni bajarib qo'ying:";
+        }
+
+        messageText += "\n\n" + pendingTasks.map((t) => `❌ ${t}`).join("\n");
+
+        await bot.api.sendMessage(student.telegramId, messageText);
+        console.log(`${student.firstName} ga eslatma yuborildi`);
       } catch (error) {
-        console.error(`Eslatma yuborish xatosi (task ${task._id}):`, error);
+        console.error(
+          `${student.firstName} ga eslatma yuborish xatosi:`,
+          error
+        );
       }
     }
   } catch (error) {
@@ -1134,8 +1517,8 @@ async function sendReminders() {
   }
 }
 
-// Eslatmalarni har 4 soatda tekshirish
-setInterval(sendReminders, 4 * 60 * 60 * 1000);
+// Har daqiqada tekshirish (belgilangan vaqtlarda yuborish uchun)
+setInterval(sendReminders, 60 * 1000);
 
 // Botni ishga tushganda ham eslatmalarni tekshirish
 bot.start({
@@ -1187,249 +1570,3 @@ mongoose
     console.error("MongoDB ulanish xatosi:", err);
     process.exit(1);
   });
-
-// Vazifalarni ko'rsatish
-bot.callbackQuery("show_tasks", async (ctx) => {
-  try {
-    const user = await User.findOne({telegramId: ctx.from.id});
-    if (!user) {
-      await ctx.answerCallbackQuery("Iltimos, avval /start buyrug'ini bosing");
-      return;
-    }
-
-    let tasks;
-    if (user.role === "student") {
-      // O'quvchi uchun - faqat obuna bo'lgan vazifalar
-      tasks = await Task.find({
-        "subscribers.studentId": ctx.from.id,
-      }).sort("-createdAt");
-    } else {
-      // O'qituvchi uchun - o'zi yaratgan vazifalar
-      tasks = await Task.find({
-        teacherId: ctx.from.id,
-      }).sort("-createdAt");
-    }
-
-    if (tasks.length === 0) {
-      await ctx.answerCallbackQuery();
-      await ctx.reply("Hali vazifalar yo'q");
-      return;
-    }
-
-    const keyboard = new InlineKeyboard();
-    tasks.forEach((task) => {
-      let status = "📝";
-      if (user.role === "student") {
-        const subscription = task.subscribers.find(
-          (s) => s.studentId === ctx.from.id
-        );
-        status = subscription.status === "completed" ? "✅" : "⏳";
-      }
-      keyboard.text(`${status} ${task.title}`, `task_${task._id}`).row();
-    });
-
-    await ctx.answerCallbackQuery();
-    await ctx.reply("Vazifalar ro'yxati:", {reply_markup: keyboard});
-  } catch (error) {
-    console.error("Vazifalarni ko'rsatish xatosi:", error);
-    await ctx.answerCallbackQuery("Xatolik yuz berdi");
-  }
-});
-
-// Vazifa ma'lumotlarini ko'rsatish
-bot.callbackQuery(/^task_/, async (ctx) => {
-  try {
-    const taskId = ctx.callbackQuery.data.split("_")[1];
-    const task = await Task.findById(taskId);
-    if (!task) {
-      await ctx.answerCallbackQuery("Vazifa topilmadi");
-      return;
-    }
-
-    const user = await User.findOne({telegramId: ctx.from.id});
-    const teacher = await User.findOne({telegramId: task.teacherId});
-
-    let message = `📝 Vazifa: ${task.title}\n\n`;
-    message += `👤 O'qituvchi: ${teacher.firstName}\n\n`;
-
-    if (user.role === "teacher") {
-      // O'qituvchi uchun statistika
-      const completed = task.subscribers.filter(
-        (s) => s.status === "completed"
-      ).length;
-      message += `\n📊 Statistika:\n`;
-      message += `👥 Obunachi o'quvchilar: ${task.subscribers.length}\n`;
-      message += `✅ Bajarilgan: ${completed}\n`;
-      message += `⏳ Bajarilmagan: ${task.subscribers.length - completed}\n`;
-
-      // Obuna havolasini ko'rsatish
-      const shareUrl = `https://t.me/${ctx.me.username}?start=${task.shareLink}`;
-      message += `\n🔗 Obuna havolasi:\n${shareUrl}`;
-    } else {
-      // O'quvchi uchun status
-      const subscription = task.subscribers.find(
-        (s) => s.studentId === ctx.from.id
-      );
-      message += `📊 Status: ${
-        subscription.status === "completed"
-          ? "✅ Bajarilgan"
-          : "⏳ Bajarilmagan"
-      }\n`;
-    }
-
-    const keyboard = new InlineKeyboard();
-
-    if (user.role === "student") {
-      const subscription = task.subscribers.find(
-        (s) => s.studentId === ctx.from.id
-      );
-      if (subscription.status === "pending") {
-        keyboard.text("✅ Bajarildi", `complete_${task._id}`);
-      }
-    }
-    keyboard
-      .text("⬅️ Orqaga", "show_tasks")
-      .row()
-      .text("❌ Obunani bekor qilish", `unfollow_${ctx.from.id}_${task._id}`);
-
-    await ctx.answerCallbackQuery();
-    await ctx.reply(message, {
-      reply_markup: keyboard,
-      reply_markup_bottom:
-        user.role === "student"
-          ? {
-              keyboard: [[{text: "📝 Vazifalar"}]],
-              resize_keyboard: true,
-            }
-          : {
-              keyboard: [[{text: "📝 Vazifalar"}, {text: "👥 O'quvchilar"}]],
-              resize_keyboard: true,
-            },
-    });
-  } catch (error) {
-    console.error("Vazifa ma'lumotlarini ko'rsatish xatosi:", error);
-    await ctx.answerCallbackQuery("Xatolik yuz berdi");
-  }
-});
-
-// Vazifani bajarildi deb belgilash
-bot.callbackQuery(/^complete_/, async (ctx) => {
-  try {
-    const taskId = ctx.callbackQuery.data.split("_")[1];
-    const task = await Task.findById(taskId);
-
-    if (!task) {
-      await ctx.answerCallbackQuery("Vazifa topilmadi");
-      return;
-    }
-
-    const subscription = task.subscribers.find(
-      (s) => s.studentId === ctx.from.id
-    );
-    if (!subscription) {
-      await ctx.answerCallbackQuery("Siz bu vazifaga obuna bo'lmagansiz");
-      return;
-    }
-
-    if (subscription.status === "completed") {
-      await ctx.answerCallbackQuery("Bu vazifa allaqachon bajarilgan");
-      return;
-    }
-
-    // Vazifani bajarildi deb belgilash
-    subscription.status = "completed";
-    subscription.completedAt = new Date();
-    await subscription.save();
-
-    // Tarixga yozish
-    await TaskHistory.create({
-      taskId: task._id,
-      studentId: ctx.from.id,
-      teacherId: task.teacherId,
-      taskTitle: task.title,
-      action: "completed",
-    });
-
-    // O'qituvchiga xabar yuborish
-    const user = await User.findOne({telegramId: ctx.from.id});
-    try {
-      await bot.api.sendMessage(
-        task.teacherId,
-        `✅ Vazifa bajarildi!\n\n👤 O'quvchi: ${user.firstName}\n\n📝 Vazifa: ${
-          task.title
-        }\n\n⏰ Vaqt: ${new Date().toLocaleTimeString("uz-UZ", {
-          hour: "2-digit",
-          minute: "2-digit",
-        })}`
-      );
-    } catch (error) {
-      console.error("O'qituvchiga xabar yuborish xatosi:", error);
-    }
-
-    await ctx.answerCallbackQuery("✅ Vazifa bajarildi deb belgilandi!");
-
-    // Vazifani yangilangan ma'lumotlarini ko'rsatish
-    const teacher = await User.findOne({telegramId: task.teacherId});
-    const keyboard = new InlineKeyboard().text("⬅️ Orqaga", "show_tasks");
-
-    let message = `📝 Vazifa: ${task.title}\n`;
-    message += `👤 O'qituvchi: ${
-      teacher ? teacher.firstName : "O'chirilgan"
-    }\n`;
-    message += `📊 Status: ✅ Bajarilgan\n`;
-    message += `🕓 Bajarilgan vaqt: ${subscription.completedAt.toLocaleTimeString(
-      "uz-UZ",
-      {hour: "2-digit", minute: "2-digit"}
-    )}\n`;
-
-    await ctx.reply(message, {
-      reply_markup: keyboard,
-      reply_markup_bottom: {
-        keyboard: [[{text: "📝 Vazifalar"}]],
-        resize_keyboard: true,
-      },
-    });
-  } catch (error) {
-    console.error("Vazifani bajarildi deb belgilash xatosi:", error);
-    await ctx.answerCallbackQuery("Xatolik yuz berdi");
-  }
-});
-
-// Yangi vazifa qo'shish callback
-bot.callbackQuery("add_task", async (ctx) => {
-  try {
-    const user = await User.findOne({telegramId: ctx.from.id});
-
-    if (!user) {
-      await ctx.answerCallbackQuery("Iltimos, avval /start buyrug'ini bosing");
-      return;
-    }
-
-    if (user.role !== "teacher") {
-      await ctx.answerCallbackQuery("Bu buyruq faqat o'qituvchilar uchun");
-      return;
-    }
-
-    ctx.session.step = "waiting_task_title";
-    await ctx.answerCallbackQuery();
-    await ctx.reply("Vazifa sarlavhasini kiriting:", {
-      reply_markup: {force_reply: true},
-    });
-  } catch (error) {
-    console.error("Yangi vazifa qo'shish xatosi:", error);
-    await ctx.answerCallbackQuery("Xatolik yuz berdi");
-  }
-});
-
-// O'qituvchi uchun qo'shimcha komandalar
-async function setTeacherCommands(ctx) {
-  await bot.api.setMyCommands(
-    [{command: "start", description: "Botni ishga tushirish"}],
-    {
-      scope: {
-        type: "chat",
-        chat_id: ctx.from.id,
-      },
-    }
-  );
-}
