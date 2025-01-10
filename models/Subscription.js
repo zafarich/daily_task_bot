@@ -30,6 +30,9 @@ const subscriptionSchema = new mongoose.Schema(
     completedAt: {
       type: Date,
     },
+    lastCompletedDate: {
+      type: Date,
+    },
   },
   {
     timestamps: true,

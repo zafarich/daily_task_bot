@@ -1298,6 +1298,7 @@ bot.on("callback_query:data", async (ctx) => {
         // Vazifani bajarildi deb belgilash
         subscription.status = "completed";
         subscription.completedAt = new Date();
+        subscription.lastCompletedDate = new Date();
         await subscription.save();
         console.log("Obuna yangilandi:", subscription);
 
@@ -1451,15 +1452,24 @@ async function sendReminders() {
 
     for (const student of students) {
       try {
-        // O'quvchining bajarilmagan vazifalarini olish
         const subscriptions = await Subscription.find({
           studentId: student.telegramId,
-          status: "pending",
         });
 
-        if (subscriptions.length === 0) continue;
+        for (const subscription of subscriptions) {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
 
-        // Bugungi bajarilgan vazifalarni olish
+          if (
+            !subscription.lastCompletedDate ||
+            subscription.lastCompletedDate < today
+          ) {
+            subscription.status = "pending";
+            await subscription.save();
+          }
+        }
+
+        // O'quvchining bajarilmagan vazifalarini olish
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const tomorrow = new Date(today);
