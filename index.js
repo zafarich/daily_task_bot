@@ -1438,13 +1438,13 @@ async function sendReminders() {
     ];
 
     // Hozirgi vaqt belgilangan vaqtlardan biri bo'lmasa, chiqib ketish
-    const isReminderTime = reminderTimes.some(
-      (time) => time.hour === currentHour && time.minute === currentMinute
-    );
+    // const isReminderTime = reminderTimes.some(
+    //   (time) => time.hour === currentHour && time.minute === currentMinute
+    // );
 
-    if (!isReminderTime) {
-      return;
-    }
+    // if (!isReminderTime) {
+    //   return;
+    // }
 
     // Barcha o'quvchilarni olish
     const students = await User.find({role: "student"});
