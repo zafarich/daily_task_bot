@@ -888,6 +888,23 @@ bot.on("callback_query:data", async (ctx) => {
         let message = `📝 Vazifa: ${task.title}\n`;
         message += `👤 O'quvchi: ${student.firstName}\n\n`;
 
+        message += `📊 Status: ${
+          subscription.status === "completed"
+            ? "✅ Bajarilgan"
+            : "⏳ Bajarilmagan"
+        }\n\n`;
+
+        // Oxirgi 10 kunlik natijalar
+        const history = await TaskHistory.find({
+          taskId: task._id,
+          studentId: ctx.from.id,
+          action: "completed",
+          timestamp: {
+            $gte: new Date(today.getTime() - 9 * 24 * 60 * 60 * 1000),
+            $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000),
+          },
+        }).sort("timestamp");
+
         message += "📅 Oxirgi 10 kunlik natijalar:\n";
 
         // Har bir kun uchun natijani tekshirish
@@ -1183,22 +1200,52 @@ bot.on("callback_query:data", async (ctx) => {
             subscription.status === "completed"
               ? "✅ Bajarilgan"
               : "⏳ Bajarilmagan"
-          }\n`;
+          }\n\n`;
 
-          // Bugungi kun uchun bajarilganlik holatini tekshirish
-          const today = new Date();
-          today.setHours(0, 0, 0, 0);
-
-          const todayHistory = await TaskHistory.findOne({
+          // Oxirgi 10 kunlik tarix
+          const history = await TaskHistory.find({
             taskId: task._id,
             studentId: ctx.from.id,
             action: "completed",
             timestamp: {
-              $gte: today,
+              $gte: new Date(today.getTime() - 9 * 24 * 60 * 60 * 1000),
               $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000),
             },
-          });
-          console.log("Bugungi natija:", todayHistory);
+          }).sort("timestamp");
+
+          message += "📅 Oxirgi 10 kunlik natijalar:\n";
+
+          // Har bir kun uchun natijani tekshirish
+          const results = [];
+          for (let i = 9; i >= 0; i--) {
+            const date = new Date(today);
+            date.setDate(date.getDate() - i);
+            date.setHours(0, 0, 0, 0);
+
+            // Agar sana obuna bo'lgan kundan oldin bo'lsa
+            const subscribeDate = new Date(subscription.subscribedAt);
+            subscribeDate.setHours(0, 0, 0, 0);
+
+            if (date < subscribeDate) {
+              results.push("⚪️");
+              continue;
+            }
+
+            // Shu kundagi natijani topish
+            const dayHistory = history.find((h) => {
+              const historyDate = new Date(h.timestamp);
+              historyDate.setHours(0, 0, 0, 0);
+              return historyDate.getTime() === date.getTime();
+            });
+
+            if (dayHistory) {
+              results.push("✅");
+            } else {
+              results.push("❌");
+            }
+          }
+
+          message += `${results.join("")}\n`;
         }
 
         const keyboard = new InlineKeyboard();
