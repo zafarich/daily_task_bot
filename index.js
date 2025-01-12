@@ -895,7 +895,7 @@ bot.on("callback_query:data", async (ctx) => {
         }\n\n`;
 
         // Oxirgi 10 kunlik natijalar
-        const history = await TaskHistory.find({
+        const taskHistory = await TaskHistory.find({
           taskId: task._id,
           studentId: ctx.from.id,
           action: "completed",
@@ -924,7 +924,7 @@ bot.on("callback_query:data", async (ctx) => {
           }
 
           // Shu kundagi natijani topish
-          const dayHistory = history.find((h) => {
+          const dayHistory = taskHistory.find((h) => {
             const historyDate = new Date(h.timestamp);
             historyDate.setHours(0, 0, 0, 0);
             return historyDate.getTime() === date.getTime();
