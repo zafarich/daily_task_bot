@@ -1202,6 +1202,10 @@ bot.on("callback_query:data", async (ctx) => {
               : "⏳ Bajarilmagan"
           }\n\n`;
 
+          // Bugungi kunni olish
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+
           // Oxirgi 10 kunlik tarix
           const history = await TaskHistory.find({
             taskId: task._id,
